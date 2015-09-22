@@ -1,0 +1,66 @@
+name:                LifeRaft
+version:             0.0.1.0
+synopsis:            A Haskell Raft implementation for real-life.
+description:         Please see README.md
+homepage:            http://github.com/DeathByTape/LifeRaft
+license:             BSD3
+license-file:        LICENSE
+author:              Dennis J. McWherter, Jr.
+maintainer:          dennis@deathbytape.com
+copyright:           2015 Yahoo, Inc.
+category:            Network
+build-type:          Simple
+-- extra-source-files:
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  exposed-modules:     Network.LifeRaft
+                     , Network.LifeRaft.Raft
+  build-depends:       base >= 4.7 && < 5
+                     , transformers >= 0.4.2.0
+                     , cereal >= 0.4.1.1
+                     , unordered-containers >= 0.2.5.1
+                     , mtl >= 2.2.1
+                     , lens >= 4.12.3
+                     , bytestring >= 0.10.6.0
+                     , network >= 2.6.2.1
+                     , network-socket-options >= 0.2.0.1
+                     , monad-logger >= 0.3.13.2
+                     , split >= 0.2.2
+                     , stm >= 2.4.4
+                     , unbounded-delays >= 0.1.0.9
+                     -- Currently unused:
+                     , uuid >= 1.3.11
+                     , parallel-io >= 0.3.3
+  default-language:    Haskell2010
+
+executable LifeRaft-exe
+  hs-source-dirs:      app
+  main-is:             Main.hs
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  build-depends:       base
+                     , LifeRaft
+                     , unordered-containers >= 0.2.5.1
+                     , transformers >= 0.4.2.0
+                     , network >= 2.6.2.1
+  default-language:    Haskell2010
+
+test-suite LifeRaft-test
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             Spec.hs
+  other-modules:       Network.LifeRaft.RaftSpec
+  build-depends:       base
+                     , LifeRaft
+                     , HUnit
+                     , QuickCheck
+                     , hspec >= 1.3
+                     , lens >= 4.12.3
+                     , transformers >= 0.4.2.0
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  default-language:    Haskell2010
+
+source-repository head
+  type:     git
+  location: https://github.com/DeathByTape/LifeRaft
