@@ -7,3 +7,4 @@ LifeRaft is intended to be a Haskell implementation of [Raft consensus](http://r
 
 Keep checking back for updates!
 
+[![Build Status](https://travis-ci.org/DeathByTape/LifeRaft.svg)](https://travis-ci.org/DeathByTape/LifeRaft)
