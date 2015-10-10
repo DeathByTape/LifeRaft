@@ -31,6 +31,7 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.State.Lazy
 import qualified Data.ByteString.Char8 as B
+import Data.Int (Int32)
 import Data.List (isPrefixOf, (\\))
 import Data.List.Split (splitOn)
 import Data.Maybe
@@ -59,9 +60,9 @@ data LifeRaft a b s m r = LifeRaft { pendingRequests :: TVar [(Socket, Int)]
 -- Serialization for SockAddr for sending server connection request (indexed by server root SockAddrs)
 instance Ser.Serialize SockAddr where
   put saddr = case saddr of
-               SockAddrInet (PortNum port) host -> Ser.putWord16be port >> Ser.putWord32be host
+               SockAddrInet port host -> Ser.putWord16be (fromIntegral port) >> Ser.putWord32be host
                _ -> fail "Unsupported."
-  get = Ser.getWord16be >>= \port -> Ser.getWord32be >>= \host -> return $ SockAddrInet (PortNum port) host
+  get = Ser.getWord16be >>= \port -> Ser.getWord32be >>= \host -> return $ SockAddrInet (fromIntegral port) host
 
 -- | Request/Response types
 --
@@ -71,15 +72,27 @@ data LifeRaftMsg a = Action (RaftAction a)
                    | ServerConnAccept
                    | ServerConnReject
                    | StateQuery deriving (Generic, Show)
--- NOTE: This protocol is a bit wasteful, but currently setting large enough to flush the send buffer
+
+-- NOTE: This protocol is a bit wasteful. Can probably tweak it later
 instance (Ser.Serialize a) => Ser.Serialize (LifeRaftMsg a) where
   put msg = case msg of
-              Action act -> Ser.putWord32be 0 >> Ser.putByteString (Ser.encode act)
-              RequestFromClient req -> Ser.putWord32be 1 >> Ser.putByteString (Ser.encode req)
-              ServerConnReq addr -> Ser.putWord32be 2 >> Ser.putByteString (Ser.encode addr)
+              Action act -> Ser.putWord32be 0 >> putValue act
+              RequestFromClient req -> Ser.putWord32be 1 >> putValue req
+              ServerConnReq addr -> Ser.putWord32be 2 >> putValue addr
               ServerConnAccept -> Ser.putWord32be 3
               ServerConnReject -> Ser.putWord32be 4
               StateQuery -> Ser.putWord32be 5
+    where putValue val = let bs = Ser.encode val in Ser.putWord32be (fromIntegral $ B.length bs) >> Ser.putByteString bs
+  get = Ser.getWord32be >>= \cmd -> case cmd of
+      0 -> Action <$> getValue
+      1 -> RequestFromClient <$> getValue
+      2 -> ServerConnReq <$> getValue
+      3 -> return ServerConnAccept
+      4 -> return ServerConnReject
+      5 -> return StateQuery
+      _ -> fail "Bad deserialization request"
+    where getValue :: (Ser.Serialize a) => Ser.Get a
+          getValue = Ser.getWord32be >>= Ser.getByteString . fromIntegral >>= either (fail "Could not deserialize") return . Ser.decode
 
 -- | Create a LifeRaft instance
 --
@@ -90,7 +103,8 @@ createLifeRaft :: (Monad m, MonadIO m, Ser.Serialize a, Ser.Serialize b, Ser.Ser
 createLifeRaft node query = do
     pReqs <- newTVarM []
     sConns <- newTVarM []
-    aServers <- newTVarM []
+    aSaddrs <- liftIO $ sequence $ fmap (\x -> getSockAddr x >>= maybe (fail "Could not get sock addr for initial server.") return) $ node ^. getServerList
+    aServers <- newTVarM aSaddrs
     tNode <- newTVarM node
     let nodeId = node ^. getId
     ourSaddr <- liftIO $ getSockAddr nodeId >>= maybe (fail "Could not get sockaddr.") return
@@ -125,6 +139,7 @@ lifeRaftMainLoop nodeSock clientSock liferaft = serverMonitor >> nodeHandler >> 
 connectToServers :: (Monad m, Ser.Serialize a) => LifeRaft a b s m r -> IO ()
 connectToServers liferaft = forever $ do
     servers <- (liftM (foldl (\result saddr -> maybe result (:result) saddr) [])) resolveNames
+    updateActiveServers servers
     curConns <- readTVarIO $ serverConnections liferaft
     let connSaddrs = fmap fst curConns
         unconnected = filter (`notElem`connSaddrs) servers
@@ -137,7 +152,9 @@ connectToServers liferaft = forever $ do
     else putStrLn "Connected to all servers."
     delay 3000000
     -- TODO: Cleanup connections to servers that are no longer active
+    -- TODO: Should we kick out servers that are no longer in our active list but maybe still connected?
   where resolveNames = (readTVarIO $ node liferaft) >>= sequence . fmap getSockAddr . (view getServerList)
+        updateActiveServers = atomically . writeTVar (activeServers liferaft)
         currentConnections = readTVarIO $ serverConnections liferaft
         connectTo = sequence . fmap tryConnect
         tryConnect saddr = newSocket >>= (\sock -> (initConn saddr sock) `catch` (\e -> (putStrLn $ "Exception: " ++ show (e :: SomeException)) >> sClose sock))
@@ -157,9 +174,23 @@ handleServerConnection liferaft conn@(_, sock) = getMsg liferaft sock >>= maybe 
   where initRequest request = do
           putStrLn "Handling server connection request."
           case request of
-           ServerConnReq id -> addServerConnection liferaft (id, sock) >>= \x -> if x then handler else sClose sock
+           ServerConnReq id -> addServerConnection liferaft (id, sock) >>= \x -> if x then acceptReq >> serverHandler liferaft conn else rejectReq >> sClose sock
            _ -> putStrLn "Received bad server handshake." >> sClose sock
-        handler = return ()
+        acceptReq = sendMsg liferaft sock ServerConnAccept
+        rejectReq = sendMsg liferaft sock ServerConnReject
+
+-- | Method actually handling logic for server requests
+--
+-- Generic handler function regardless of whether the server connected from or connected to.
+--
+serverHandler :: (Ser.Serialize a)
+              => LifeRaft a b s m r
+              -> (SockAddr, Socket)
+              -> IO ()
+serverHandler liferaft (saddr, sock) = do
+  putStrLn "Handling! Immediately disconnecting... TODO"
+  sClose sock
+  removeServerConnection liferaft saddr
 
 -- | Handle client connection request
 --
@@ -184,7 +215,7 @@ identifyAsServer liferaft conn@(_, sock) = sendMsg liferaft sock (ServerConnReq 
           case res of
            Nothing -> putStrLn "Could not deserialize response." >> return False
            Just v -> case v of
-             ServerConnAccept -> addServerConnection liferaft conn
+             ServerConnAccept -> addServerConnection liferaft conn >>= \x -> putStrLn ("Connected to server") >> (forkIO $! serverHandler liferaft conn) >> return x
              ServerConnReject -> putStrLn "Server already connected from this address." >> return False
              _ -> putStrLn "Invalid server identification response." >> return False
 
@@ -202,6 +233,11 @@ addServerConnection liferaft conn@(saddr, _) = atomically $ do
       return True
   where conns = serverConnections liferaft
         activeList = activeServers liferaft
+
+removeServerConnection :: LifeRaft a b s m r -> SockAddr -> IO ()
+removeServerConnection liferaft saddr = atomically $ do
+  connected <- readTVar $ serverConnections liferaft
+  writeTVar (serverConnections liferaft) (filter ((/=saddr).fst) connected)
 
 -- NOTE: Currently assuming IPv4
 getSockAddr :: String -> IO (Maybe SockAddr)
@@ -251,16 +287,18 @@ recvWithLen :: Socket -> IO B.ByteString
 recvWithLen sock = recvInt32 sock >>= recvAll sock
 
 recvInt32 :: Socket -> IO Int
-recvInt32 sock = recvAll sock 4 >>= return . maybe (-1) fst . B.readInt
+recvInt32 sock = recvAll sock 4 >>= \x -> either (\v -> fail $ "Failed: " ++ v) (return . fromIntegral) ((Ser.decode x) :: Either String Int32)
 
 recvAll :: Socket -> Int -> IO B.ByteString
-recvAll sock total = if total > 0 then recvAll' (return B.empty) else return B.empty
-  where recvAll' bs = do
+recvAll sock total = if total > 0 then recvAll' emptyBS else emptyBS
+  where emptyBS = return B.empty
+        recvAll' bs = do
           rcvd <- bs
           let len = B.length rcvd
           putStrLn $ "Receiving: " ++ show rcvd  ++ " == " ++ show len ++ " of " ++ show total
           if len == total then bs else recv sock (total - len) >>= recvAll' . return . (B.append rcvd)
 
 sendWithLen :: Socket -> B.ByteString -> IO ()
-sendWithLen sock msg = (sendAll sock $! (B.pack $ show $ B.length msg)) >> sendAll sock msg >> (putStrLn $ "Sent: " ++ show msg)
+sendWithLen sock msg = (sendAll sock $! len) >> sendAll sock msg
+  where len = Ser.encode $ ((fromIntegral $ B.length msg) :: Int32)
 
