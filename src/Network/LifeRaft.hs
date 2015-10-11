@@ -34,57 +34,11 @@ import qualified Data.Serialize as Ser
 import Data.Tuple (swap)
 import Network.Socket hiding (recvAll)
 import Network.LifeRaft.Internal.NetworkHelper
+import Network.LifeRaft.Internal.Types
 import Network.LifeRaft.Raft
 import System.Timeout
 
 -- TODO: Need to use monad-logger over putStrLn statements
-
--- | Structure holding LifeRaft state
---
-data LifeRaft a b s m r = LifeRaft { pendingRequests :: TVar [(Socket, Int)]
-                                   , serverConnections :: TVar [(SockAddr, Socket)]
-                                   , activeServers :: TVar [SockAddr]
-                                   , ourSockAddr :: SockAddr
-                                   , node :: TVar (Node a s m r)
-                                   , stateQuery :: b -> StateT s (NodeStateT a s m r) r
-                                   }
-
--- Serialization for SockAddr for sending server connection request (indexed by server root SockAddrs)
-instance Ser.Serialize SockAddr where
-  put saddr = case saddr of
-               SockAddrInet port host -> Ser.putWord16be (fromIntegral port) >> Ser.putWord32be host
-               _ -> fail "Unsupported."
-  get = Ser.getWord16be >>= \port -> Ser.getWord32be >>= \host -> return $ SockAddrInet (fromIntegral port) host
-
--- | Request/Response types
---
-data LifeRaftMsg a = Action (RaftAction a)
-                   | RequestFromClient a
-                   | ServerConnReq (SockAddr)
-                   | ServerConnAccept
-                   | ServerConnReject
-                   | StateQuery deriving (Show)
-
--- NOTE: This protocol is a bit wasteful. Can probably tweak it later
-instance (Ser.Serialize a) => Ser.Serialize (LifeRaftMsg a) where
-  put msg = case msg of
-              Action act -> Ser.putWord32be 0 >> putValue act
-              RequestFromClient req -> Ser.putWord32be 1 >> putValue req
-              ServerConnReq addr -> Ser.putWord32be 2 >> putValue addr
-              ServerConnAccept -> Ser.putWord32be 3
-              ServerConnReject -> Ser.putWord32be 4
-              StateQuery -> Ser.putWord32be 5
-    where putValue val = let bs = Ser.encode val in Ser.putWord32be (fromIntegral $ B.length bs) >> Ser.putByteString bs
-  get = Ser.getWord32be >>= \cmd -> case cmd of
-      0 -> Action <$> getValue
-      1 -> RequestFromClient <$> getValue
-      2 -> ServerConnReq <$> getValue
-      3 -> return ServerConnAccept
-      4 -> return ServerConnReject
-      5 -> return StateQuery
-      _ -> fail "Bad deserialization request"
-    where getValue :: (Ser.Serialize a) => Ser.Get a
-          getValue = Ser.getWord32be >>= Ser.getByteString . fromIntegral >>= either (fail "Could not deserialize") return . Ser.decode
 
 -- | Create a LifeRaft instance
 --

@@ -16,7 +16,7 @@ cabal-version:       >=1.10
 library
   hs-source-dirs:      src
   exposed-modules:     Network.LifeRaft
-                     --, Network.LifeRaft.Internal.Types
+                     , Network.LifeRaft.Internal.Types
                      , Network.LifeRaft.Internal.NetworkHelper
                      , Network.LifeRaft.Raft
                      , Network.LifeRaft.Raft.Internal.Types
