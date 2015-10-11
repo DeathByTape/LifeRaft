@@ -12,5 +12,6 @@ before_install:
   - travis_retry sudo apt-get update && sudo apt-get install stack -y
 install:
   - stack setup
+  - stack build --library-profiling --executable-profiling
 script:
-  - stack test
+  - stack test --coverage
