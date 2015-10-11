@@ -45,6 +45,7 @@ module Network.LifeRaft.Raft (
 ) where
 
 import Control.Lens
+import Control.Monad
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.State.Lazy
 import qualified Data.HashMap.Lazy as HM
@@ -81,7 +82,7 @@ data Node a s m r = Node { _nodeState :: NodeState a
                          , _serverList :: [Id]
                          , _nodeId :: Id
                          , _stateSnapshot :: (r, s)
-                         , _stateMachine :: (a -> StateT s (NodeStateT a s m r) r)
+                         , _stateMachine :: a -> StateT s (NodeStateT a s m r) r
                          , _electionTimeout :: TimeoutInterval
                          }
 makeLenses ''Node
@@ -195,8 +196,8 @@ tallyVote id status = do
     node <- get
     let rcvd = node ^. getVotesReceived
         sList = node ^. getServerList
-        updated = if id `notElem` rcvd && id `elem` sList then (node & getVotesReceived .~ (id : rcvd)) else node
-        hasMajority = ((fromIntegral $ length (updated ^. getVotesReceived)) / (fromIntegral $ length sList + 1)) > 0.5
+        updated = if id `notElem` rcvd && id `elem` sList then node & getVotesReceived .~ (id : rcvd) else node
+        hasMajority = (fromIntegral (length (updated ^. getVotesReceived)) / fromIntegral (length sList + 1)) > 0.5
     if hasMajority then do
       put $ updated & getNodeStatus .~ Leader
       return Elected
@@ -217,7 +218,7 @@ receiveSuccess status (id, idx, _) = do
         nextIdxMap  = HM.insert id (idx + 1) $ node ^. nodeState . nextIndex
         updated = (node & nodeState . matchIndex .~ matchIdxMap) & nodeState . nextIndex .~ nextIdxMap
         majority = calcMajorityIndex matchIdxMap
-        result = if majority > commitIdx then (updated & getCommitIndex .~ majority) else updated
+        result = if majority > commitIdx then updated & getCommitIndex .~ majority else updated
     put result
     return Noop
 
@@ -266,7 +267,7 @@ membershipChange id = do
   -- TODO: Update membership and init 2-phase process
   node <- get
   let sList = node ^. serverList
-  if elem id sList then return () else put $ node & serverList .~ (id : sList)
+  unless (id `elem` sList) $ put $ node & serverList .~ (id : sList)
   return Noop
 
 -- | Generate heartbeat
@@ -281,15 +282,15 @@ heartbeat node = HeartBeat $ foldl prepHB [] servers
         log = node ^. getLog
         prepHB res id = (id, request next plIdx plTerm entries) : res
           where next = HM.lookupDefault (length log) id nextIdx
-                plIdx = if next > 0 then (next - 1) else 0
+                plIdx = if next > 0 then next - 1 else 0
                 plTerm = if null log then 0 else fst $ log !! plIdx
                 entries = drop plIdx log
         request idx plIdx plTerm entries = (term, nodeId, plIdx, plTerm, entries, commitIdx)
 
 -- | Calculate highest index for majority
 --
-calcMajorityIndex matchIdxMap = minimum $ take count $ (reverse . sort) $ HM.elems matchIdxMap
-  where count = ceiling $ (fromIntegral $ HM.size matchIdxMap) / 2
+calcMajorityIndex matchIdxMap = minimum $ take count $ sortBy (flip compare) $ HM.elems matchIdxMap
+  where count = ceiling $ fromIntegral (HM.size matchIdxMap) / 2
 
 -- Access control functions
 
@@ -321,7 +322,7 @@ applyChanges = applyChanges' []
             logApplication = (currentNode ^. stateMachine) (snd $ sLog !! nextToApply)
         newState <- runStateT logApplication (snd $ currentNode ^. stateSnapshot)
         put $ (currentNode & getLastApplied .~ nextToApply) & stateSnapshot .~ newState
-        applyChanges' ((fst newState) : results)
+        applyChanges' (fst newState : results)
       else
         return results
 
@@ -337,15 +338,15 @@ appendEntries term leaderId prevLogIdx prevLogTerm entries leaderCommit = do
   currentNode <- get
   let sLog = currentNode ^. getLog
       curTerm = currentNode ^. getCurrentTerm
-      prevIdxTerm = if length sLog <= prevLogIdx then 0 else (fst $ sLog !! prevLogIdx)
+      prevIdxTerm = if length sLog <= prevLogIdx then 0 else fst $ sLog !! prevLogIdx
   if term < curTerm || prevLogTerm /= prevIdxTerm then
     return False
   else do
     -- Update the log: take all entries up to and including prevLogIdx and drop the rest. Append the remaining entries
-    let updatedLog = (take (prevLogIdx + 1) sLog) ++ entries
+    let updatedLog = take (prevLogIdx + 1) sLog ++ entries
     -- Update the commit index if necessary and step through machine
         commitIdx = currentNode ^. getCommitIndex
-        updatedCI = if leaderCommit > commitIdx then (min leaderCommit ((length updatedLog) - 1)) else commitIdx
+        updatedCI = if leaderCommit > commitIdx then min leaderCommit (length updatedLog - 1) else commitIdx
     put $ ((currentNode & getLog .~ updatedLog) & getCurrentTerm .~ term) & getCommitIndex .~ updatedCI
     return True
 
@@ -363,9 +364,9 @@ requestVote term candidateId lastLogIdx lastLogTerm = do
     return $ Just currentTerm
   else do
     let logs = currentNode ^. getLog
-        grantVote = maybe True (\id -> lastLogIdx == ((length logs) - 1) && ((fst . last) logs) <= lastLogTerm) votedFor
+        grantVote = maybe True (\id -> lastLogIdx == (length logs - 1) && (fst . last) logs <= lastLogTerm) votedFor
     if grantVote then do
-      put $ currentNode & getVotedFor .~ (Just candidateId)
+      put $ currentNode & getVotedFor .~ Just candidateId
       return Nothing
     else
       return $ Just currentTerm
@@ -403,4 +404,3 @@ getServerList = serverList
 
 getCurrentLeader :: Lens' (Node a s m r) Id
 getCurrentLeader = currentLeader
-

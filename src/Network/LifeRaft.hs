@@ -46,7 +46,7 @@ data LifeRaft a b s m r = LifeRaft { pendingRequests :: TVar [(Socket, Int)]
                                    , activeServers :: TVar [SockAddr]
                                    , ourSockAddr :: SockAddr
                                    , node :: TVar (Node a s m r)
-                                   , stateQuery :: (b -> StateT s (NodeStateT a s m r) r)
+                                   , stateQuery :: b -> StateT s (NodeStateT a s m r) r
                                    }
 
 -- Serialization for SockAddr for sending server connection request (indexed by server root SockAddrs)
@@ -95,7 +95,7 @@ createLifeRaft :: (Monad m, MonadIO m, Ser.Serialize a, Ser.Serialize b, Ser.Ser
 createLifeRaft node query = do
     pReqs <- newTVarM []
     sConns <- newTVarM []
-    aSaddrs <- liftIO $ sequence $ fmap (\x -> getSockAddr x >>= maybe (fail "Could not get sock addr for initial server.") return) $ node ^. getServerList
+    aSaddrs <- liftIO $ sequence $ fmap (getSockAddr >=> maybe (fail "Could not get sock addr for initial server.") return) $ node ^. getServerList
     aServers <- newTVarM aSaddrs
     tNode <- newTVarM node
     let nodeId = node ^. getId
@@ -108,7 +108,7 @@ createLifeRaft node query = do
 runLifeRaft :: (Monad m, Ser.Serialize a, Ser.Serialize b, Ser.Serialize r) => String -> LifeRaft a b s m r -> IO ()
 runLifeRaft clientAddr state = newSock >>= \nSock -> newSock >>= \cSock -> startAndRun nSock cSock >> sClose nSock >> sClose cSock
   where startAndRun nSock cSock = startListener sAddr nSock >> startListener cAddr cSock >> lifeRaftMainLoop nSock cSock state
-        serverComps = (readTVarIO $ node state) >>= getSockAddr . (view getId)
+        serverComps = readTVarIO (node state) >>= getSockAddr . view getId
         sAddr = serverComps >>= maybe (fail "Could not get sockAddr for host.") return
         cAddr = getSockAddr clientAddr >>= maybe (fail "Could not get client host sockAddr.") return
         newSock = socket AF_INET Stream defaultProtocol >>= \sock -> setSocketOption sock NoDelay 1 >> setSocketOption sock ReuseAddr 1 >> return sock
@@ -130,7 +130,7 @@ lifeRaftMainLoop nodeSock clientSock liferaft = serverMonitor >> nodeHandler >> 
 --
 connectToServers :: (Monad m, Ser.Serialize a) => LifeRaft a b s m r -> IO ()
 connectToServers liferaft = forever $ do
-    servers <- (liftM (foldl (\result saddr -> maybe result (:result) saddr) [])) resolveNames
+    servers <- liftM (foldl (\result saddr -> maybe result (:result) saddr) []) resolveNames
     updateActiveServers servers
     curConns <- readTVarIO $ serverConnections liferaft
     let connSaddrs = fmap fst curConns
@@ -145,13 +145,13 @@ connectToServers liferaft = forever $ do
     delay 3000000
     -- TODO: Cleanup connections to servers that are no longer active
     -- TODO: Should we kick out servers that are no longer in our active list but maybe still connected?
-  where resolveNames = (readTVarIO $ node liferaft) >>= sequence . fmap getSockAddr . (view getServerList)
+  where resolveNames = readTVarIO (node liferaft) >>= sequence . fmap getSockAddr . view getServerList
         updateActiveServers = atomically . writeTVar (activeServers liferaft)
         currentConnections = readTVarIO $ serverConnections liferaft
         connectTo = sequence . fmap tryConnect
-        tryConnect saddr = newSocket >>= (\sock -> (initConn saddr sock) `catch` (\e -> (putStrLn $ "Exception: " ++ show (e :: SomeException)) >> sClose sock))
+        tryConnect saddr = newSocket >>= (\sock -> initConn saddr sock `catch` (\e -> putStrLn $ "Exception: " ++ show (e :: SomeException)) >> sClose sock)
         newSocket = socket AF_INET Stream defaultProtocol >>= \sock -> setSocketOption sock NoDelay 1 >> return sock
-        initConn saddr sock = connect sock saddr >> identifyAsServer liferaft (saddr, sock) >>= \identified -> if identified then return () else (sClose sock)
+        initConn saddr sock = connect sock saddr >> identifyAsServer liferaft (saddr, sock) >>= \identified -> unless identified $ sClose sock
 
 -- | Handle server connection requests
 --
@@ -203,11 +203,10 @@ handleClientConnection liferaft (saddr, sock) = do
 identifyAsServer :: (Ser.Serialize a) => LifeRaft a b s m r -> (SockAddr, Socket) -> IO Bool
 identifyAsServer liferaft conn@(_, sock) = sendMsg liferaft sock (ServerConnReq sId) >> getMsg liferaft sock >>= handleResp
   where sId = ourSockAddr liferaft
-        handleResp res = do
-          case res of
+        handleResp res = case res of
            Nothing -> putStrLn "Could not deserialize response." >> return False
            Just v -> case v of
-             ServerConnAccept -> addServerConnection liferaft conn >>= \x -> putStrLn ("Connected to server") >> (forkIO $! serverHandler liferaft conn) >> return x
+             ServerConnAccept -> addServerConnection liferaft conn >>= \x -> putStrLn "Connected to server" >> (forkIO $! serverHandler liferaft conn) >> return x
              ServerConnReject -> putStrLn "Server already connected from this address." >> return False
              _ -> putStrLn "Invalid server identification response." >> return False
 
@@ -249,6 +248,5 @@ getMsg _ sock = do
     msg <- recvWithLen sock
     case Ser.decode msg of
      Left e -> putStrLn ("Could not decode message: " ++ show e) >> return Nothing
-     Right result -> putStrLn "Message received." >> (return $ Just result)
-  maybe (putStrLn "Receive timed out." >> return Nothing) (return . id) final
-
+     Right result -> putStrLn "Message received." >> return (Just result)
+  maybe (putStrLn "Receive timed out." >> return Nothing) return final
