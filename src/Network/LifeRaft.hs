@@ -1,5 +1,4 @@
-{-# LANGUAGE OverloadedStrings, DeriveGeneric, DefaultSignatures #-}
----------------------------------------------------------
+{-# LANGUAGE OverloadedStrings #-}
 -- Module      : Network.LifeRaft
 -- Copyright   : (c) 2015 Yahoo, Inc.
 -- License     : BSD3
@@ -31,18 +30,11 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.State.Lazy
 import qualified Data.ByteString.Char8 as B
-import Data.Int (Int32)
-import Data.List (isPrefixOf, (\\))
-import Data.List.Split (splitOn)
-import Data.Maybe
 import qualified Data.Serialize as Ser
-import Data.Tuple
-import GHC.Generics
-import Network.BSD
-import Network.Socket hiding (send, sendTo, recv, recvFrom)
-import Network.Socket.ByteString
+import Data.Tuple (swap)
+import Network.Socket hiding (recvAll)
+import Network.LifeRaft.Internal.NetworkHelper
 import Network.LifeRaft.Raft
-import System.IO
 import System.Timeout
 
 -- TODO: Need to use monad-logger over putStrLn statements
@@ -71,7 +63,7 @@ data LifeRaftMsg a = Action (RaftAction a)
                    | ServerConnReq (SockAddr)
                    | ServerConnAccept
                    | ServerConnReject
-                   | StateQuery deriving (Generic, Show)
+                   | StateQuery deriving (Show)
 
 -- NOTE: This protocol is a bit wasteful. Can probably tweak it later
 instance (Ser.Serialize a) => Ser.Serialize (LifeRaftMsg a) where
@@ -239,16 +231,6 @@ removeServerConnection liferaft saddr = atomically $ do
   connected <- readTVar $ serverConnections liferaft
   writeTVar (serverConnections liferaft) (filter ((/=saddr).fst) connected)
 
--- NOTE: Currently assuming IPv4
-getSockAddr :: String -> IO (Maybe SockAddr)
-getSockAddr serverId = do
-  let val = splitOn ":" serverId
-  if length val /= 2 then
-    return Nothing
-  else do
-    hAddr <- getHostByName $ val !! 0
-    return $ Just $ SockAddrInet (fromInteger ((read $ val !! 1) :: Integer)) (hostAddress hAddr)
-     
 getActiveServers :: LifeRaft a b s m r -> IO [SockAddr]
 getActiveServers liferaft = readTVarIO $ activeServers liferaft
 
@@ -269,36 +251,4 @@ getMsg _ sock = do
      Left e -> putStrLn ("Could not decode message: " ++ show e) >> return Nothing
      Right result -> putStrLn "Message received." >> (return $ Just result)
   maybe (putStrLn "Receive timed out." >> return Nothing) (return . id) final
-
---
--- The following methods are network helpers
--- some of them are being reproduced from places like Network.Transport.TCP
---
--- The goal is to move to Network.Transport if the team is willing to maintain a
--- standard protocol for connections such that foreign clients can connect properly.
---
--- TODO: Need to get in touch with the CloudHaskell team about this.
---
-
--- TODO: Should account for endianess. That is, everything should be sent/received in network byte order
---       (i.e. big endian) and converted appropriately.
-
-recvWithLen :: Socket -> IO B.ByteString
-recvWithLen sock = recvInt32 sock >>= recvAll sock
-
-recvInt32 :: Socket -> IO Int
-recvInt32 sock = recvAll sock 4 >>= \x -> either (\v -> fail $ "Failed: " ++ v) (return . fromIntegral) ((Ser.decode x) :: Either String Int32)
-
-recvAll :: Socket -> Int -> IO B.ByteString
-recvAll sock total = if total > 0 then recvAll' emptyBS else emptyBS
-  where emptyBS = return B.empty
-        recvAll' bs = do
-          rcvd <- bs
-          let len = B.length rcvd
-          putStrLn $ "Receiving: " ++ show rcvd  ++ " == " ++ show len ++ " of " ++ show total
-          if len == total then bs else recv sock (total - len) >>= recvAll' . return . (B.append rcvd)
-
-sendWithLen :: Socket -> B.ByteString -> IO ()
-sendWithLen sock msg = (sendAll sock $! len) >> sendAll sock msg
-  where len = Ser.encode $ ((fromIntegral $ B.length msg) :: Int32)
 
