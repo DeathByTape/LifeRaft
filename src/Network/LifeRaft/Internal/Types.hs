@@ -46,7 +46,7 @@ data LifeRaftMsg a = Action (RaftAction a)
                     | ServerConnReq (SockAddr)
                     | ServerConnAccept
                     | ServerConnReject
-                    | StateQuery deriving (Show)
+                    | StateQuery deriving (Eq, Show)
 
 -- NOTE: This protocol is a bit wasteful. Can probably tweak it later
 instance (Serialize a) => Serialize (LifeRaftMsg a) where

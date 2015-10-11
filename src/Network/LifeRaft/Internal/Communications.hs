@@ -28,7 +28,8 @@ sendMsg _ sock msg = sendWithLen sock $! encode msg
 -- | Receive a LifeRaft message over a socket
 getMsg :: (Serialize a) => LifeRaft a b s m r -> Socket -> IO (Maybe (LifeRaftMsg a))
 getMsg _ sock = do
-  putStrLn "Receiving message..."
+  -- TODO: Support for monad-logger.
+  --putStrLn "Receiving message..."
   -- 5s timeout
   -- TODO: Timeout should be configurable
   final <- timeout 5000000 $ do

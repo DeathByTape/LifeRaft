@@ -88,7 +88,7 @@ data RaftAction a =   RequestVote (Term, Id, Int, Term)
                      | ElectionTimeout
                      | VoteReceived Id
                      | ClientRequest a
-                     deriving (Show, Generic)
+                     deriving (Show, Eq, Generic)
 -- Default serialization instance
 instance (Serialize a) => Serialize (RaftAction a)
 

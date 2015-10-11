@@ -53,7 +53,9 @@ test-suite LifeRaft-test
   hs-source-dirs:      test
   main-is:             Spec.hs
   other-modules:       Network.LifeRaft.RaftSpec
+                     , Network.LifeRaft.Internal.CommunicationsSpec
                      , Network.LifeRaft.Internal.NetworkHelperSpec
+                     , Network.LifeRaft.Internal.TestHelpers
   build-depends:       base
                      , LifeRaft
                      , HUnit
