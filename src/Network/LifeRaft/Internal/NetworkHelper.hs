@@ -19,6 +19,8 @@ module Network.LifeRaft.Internal.NetworkHelper (
 ) where
 
 import Prelude hiding (length)
+import Control.Exception
+import Control.Monad
 import Data.ByteString.Char8
 import Data.Int (Int32)
 import qualified Data.List as DL
@@ -88,10 +90,18 @@ sendWithLen sock msg = (sendAll sock $! len) >> sendAll sock msg
 --
 getSockAddr :: String -> IO (Maybe SockAddr)
 getSockAddr serverId = do
-  let val = splitOn ":" serverId
-  if DL.length val /= 2 then
-    return Nothing
-  else do
-    hAddr <- getHostByName $ val !! 0
-    return $ Just $ SockAddrInet (fromInteger ((read $ val !! 1) :: Integer)) (hostAddress hAddr)
+    let val = splitOn ":" serverId
+    if DL.length val /= 2 then
+      return Nothing
+    else do
+      -- Read its full value first. If > 16-bit value, then we will discard
+      let port = getPortVal val
+      if port < 1 || port > 65535 then
+        return Nothing
+      else do
+        lookup <- catch (sequence $ Just (getHostByName $ val !! 0)) (\(SomeException _) -> return Nothing)
+        case lookup of
+         Nothing -> return Nothing
+         Just v -> return $ Just $ SockAddrInet (fromIntegral $ getPortVal val) $ hostAddress v
+  where getPortVal val = (read $ val !! 1) :: Integer
 
