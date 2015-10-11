@@ -1,4 +1,4 @@
-{-# LANGUAGE TemplateHaskell, DefaultSignatures, DeriveGeneric #-}
+{-# LANGUAGE TemplateHaskell #-}
 ---------------------------------------------------------
 -- Module      : Network.LifeRaft.Raft
 -- Copyright   : (c) 2015 Yahoo, Inc.
@@ -46,73 +46,14 @@ module Network.LifeRaft.Raft (
 
 import Control.Lens
 import Control.Monad
-import Control.Monad.Trans.Class
 import Control.Monad.Trans.State.Lazy
 import qualified Data.HashMap.Lazy as HM
 import Data.List
-import qualified Data.Serialize as Ser
-import GHC.Generics
+import Network.LifeRaft.Raft.Internal.Types
 
-type TimeoutInterval = (Int, Int)
-type Term = Int
-type Id = String
-
-data NodeStatus = Leader | Follower | Candidate deriving (Eq, Show)
-
-data NodeState a = NodeState { -- Persistent state (i.e. stored to disk)
-                               _currentTerm :: Term
-                             , _votedFor :: Maybe Id
-                               -- TODO: Log entry should have UUID associated with it?
-                             , _logEntries :: [(Term, a)]
-                               -- Volatile state
-                             , _commitIndex :: Int
-                             , _lastApplied :: Int
-                             , _nextIndex :: HM.HashMap Id Int
-                             , _matchIndex :: HM.HashMap Id Int
-                             , _nodeStatus :: NodeStatus
-                             } deriving (Show, Generic)
--- TODO: Eventually a feature for checkpointing may be useful
+-- TODO: Eventually a feature for checkpointing may be useful on NodeState
 makeLenses ''NodeState
-
-type NodeStateT a s m r = StateT (Node a s m r) m
-
-data Node a s m r = Node { _nodeState :: NodeState a
-                         , _votesReceived :: [Id]
-                         , _currentLeader :: Id
-                         , _serverList :: [Id]
-                         , _nodeId :: Id
-                         , _stateSnapshot :: (r, s)
-                         , _stateMachine :: a -> StateT s (NodeStateT a s m r) r
-                         , _electionTimeout :: TimeoutInterval
-                         }
 makeLenses ''Node
-
--- | Action to execute
---
-data RaftAction a =   RequestVote (Term, Id, Int, Term)
-                    | AppendEntries (Term, Id, Int, Term, [(Term, a)], Int)
-                    | AppendEntriesResult (Id, Int, Bool)
-                    | DiscoverNode Id
-                    | ElectionTimeout
-                    | VoteReceived Id
-                    | ClientRequest a
-                      deriving (Show, Generic)
-instance (Ser.Serialize a) => Ser.Serialize (RaftAction a)
-
--- | Result from state machine
---
-data RaftResult a =  Elected
-                   | ElectionStarted
-                   | AppendEntriesSuccess (Id, Int)
-                   | AppendEntriesFailure Id
-                   | VoteGranted Id
-                   | RejectVote Term
-                   | RedirectToLeader Id
-                   | HeartBeat [(Id, (Term, Id, Int, Term, [(Term, a)], Int))]
-                   | Noop
-                    deriving (Eq, Show)
-
-type RaftState a s m r = StateT (Node a s m r) m (RaftResult a)
 
 -- | Initialize a new node
 --
