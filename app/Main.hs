@@ -12,6 +12,7 @@
 
 module Main where
 
+import Control.Monad
 import Control.Monad.Trans.State.Lazy
 import qualified Data.HashMap.Lazy as HM
 import Data.List
@@ -32,7 +33,7 @@ main = withSocketsDo $ do
   where getNode server servers = initNode servers server ("", HM.empty) storeKeyValue (20, 40)
         getServer = do
           args <- getArgs
-          let this = args !! 0
+          let this = head args
           if length args <= 0 || this `notElem` servers then
             fail $ "Please provide a server from list: " ++ show servers
           else
@@ -47,9 +48,7 @@ clientAddress server
   | otherwise = ""
 
 storeKeyValue :: Monad m => (String, String) -> StateT (HM.HashMap String String) (NodeStateT a s m r) String
-storeKeyValue (key, value) = get >>= return . (HM.insert key value) >>= put >> return value
+storeKeyValue (key, value) = liftM (HM.insert key value) get >>= put >> return value
 
 lookupKey :: Monad m => String -> StateT (HM.HashMap String String) (NodeStateT a s m r) String
-lookupKey key = get >>= return . (HM.lookupDefault "" key)
-
-
+lookupKey key = liftM (HM.lookupDefault "" key) get

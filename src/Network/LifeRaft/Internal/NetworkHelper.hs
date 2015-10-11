@@ -36,7 +36,7 @@ import Network.Socket.ByteString
 --
 -- The goal is to move to Network.Transport if the team is willing to maintain a
 -- standard protocol for connections such that foreign clients can connect properly.
--- That is, it currently seems as though only 
+-- That is, it currently seems as though only
 --
 -- TODO: Need to get in touch with the CloudHaskell team about this.
 --
@@ -58,7 +58,7 @@ recvWithLen sock = recvInt32 sock >>= recvAll sock
 -- Receives a 32-bit integer from a socket
 --
 recvInt32 :: Socket -> IO Int
-recvInt32 sock = recvAll sock 4 >>= \x -> either (\v -> fail $ "Failed: " ++ v) (return . fromIntegral) ((decode x) :: Either String Int32)
+recvInt32 sock = recvAll sock 4 >>= \x -> either (\v -> fail $ "Failed: " ++ v) (return . fromIntegral) (decode x :: Either String Int32)
 
 -- | Receive n bytes from a socket
 --
@@ -71,7 +71,7 @@ recvAll sock total = if total > 0 then recvAll' emptyBS else emptyBS
         recvAll' bs = do
           rcvd <- bs
           let len = length rcvd
-          if len == total then bs else recv sock (total - len) >>= recvAll' . return . (append rcvd)
+          if len == total then bs else recv sock (total - len) >>= recvAll' . return . append rcvd
 
 -- | Send a full ByteString over a socket
 --
@@ -79,7 +79,7 @@ recvAll sock total = if total > 0 then recvAll' emptyBS else emptyBS
 --
 sendWithLen :: Socket -> ByteString -> IO ()
 sendWithLen sock msg = (sendAll sock $! len) >> sendAll sock msg
-  where len = encode $ ((fromIntegral $ length msg) :: Int32)
+  where len = encode ((fromIntegral $ length msg) :: Int32)
 
 -- | Get a hostname based on a formatted string
 --
@@ -99,9 +99,8 @@ getSockAddr serverId = do
       if port < 1 || port > 65535 then
         return Nothing
       else do
-        lookup <- catch (sequence $ Just (getHostByName $ val !! 0)) (\(SomeException _) -> return Nothing)
+        lookup <- catch (sequence $ Just (getHostByName $ DL.head val)) (\(SomeException _) -> return Nothing)
         case lookup of
          Nothing -> return Nothing
          Just v -> return $ Just $ SockAddrInet (fromIntegral $ getPortVal val) $ hostAddress v
   where getPortVal val = (read $ val !! 1) :: Integer
-
