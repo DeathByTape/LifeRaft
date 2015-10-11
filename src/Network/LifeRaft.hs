@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+---------------------------------------------------------
 -- Module      : Network.LifeRaft
 -- Copyright   : (c) 2015 Yahoo, Inc.
 -- License     : BSD3
@@ -33,10 +34,11 @@ import qualified Data.ByteString.Char8 as B
 import qualified Data.Serialize as Ser
 import Data.Tuple (swap)
 import Network.Socket hiding (recvAll)
+
+import Network.LifeRaft.Internal.Communications
 import Network.LifeRaft.Internal.NetworkHelper
 import Network.LifeRaft.Internal.Types
 import Network.LifeRaft.Raft
-import System.Timeout
 
 -- TODO: Need to use monad-logger over putStrLn statements
 
@@ -186,21 +188,3 @@ removeServerConnection liferaft saddr = atomically $ do
 
 getActiveServers :: LifeRaft a b s m r -> IO [SockAddr]
 getActiveServers liferaft = readTVarIO $ activeServers liferaft
-
---
--- Extra info for type inference
---
-sendMsg :: (Ser.Serialize a) => LifeRaft a b s m r -> Socket -> LifeRaftMsg a -> IO ()
-sendMsg _ sock msg = sendWithLen sock $! Ser.encode msg
-
-getMsg :: (Ser.Serialize a) => LifeRaft a b s m r -> Socket -> IO (Maybe (LifeRaftMsg a))
-getMsg _ sock = do
-  putStrLn "Receiving message..."
-  -- 5s timeout
-  -- TODO: Should be configurable
-  final <- timeout 5000000 $ do
-    msg <- recvWithLen sock
-    case Ser.decode msg of
-     Left e -> putStrLn ("Could not decode message: " ++ show e) >> return Nothing
-     Right result -> putStrLn "Message received." >> return (Just result)
-  maybe (putStrLn "Receive timed out." >> return Nothing) return final
